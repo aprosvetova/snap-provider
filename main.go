@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/aprosvetova/snap-provider/mjpeg"
 	"github.com/aprosvetova/snap-provider/queue"
-	"github.com/cheggaaa/pb/v3"
 	"io"
 	"net/http"
 	"os"
@@ -15,16 +14,15 @@ import (
 )
 
 var frameQueue *queue.Queue
-var bar *pb.ProgressBar
+var conf config
 
 func keepFrames() {
 	fmt.Println("Initializing...")
-	dec, err := mjpeg.NewDecoderFromURL(mjpegStream)
+	dec, err := mjpeg.NewDecoderFromURL(conf.MjpegStream)
 	if err != nil {
 		fmt.Println("Can't open stream", err)
 		os.Exit(1)
 	}
-	systemd := os.Getppid() == 1
 	for {
 		p, err := dec.GetPart()
 		if err != nil {
@@ -38,44 +36,30 @@ func keepFrames() {
 			continue
 		}
 		frameQueue.Push(buf.Bytes())
-		if frameQueue.GetLength() < frameBufferLength {
-			if systemd {
-				updatePlainProgress(frameQueue.GetLength())
-			} else {
-				updateProgress(frameQueue.GetLength())
-			}
+		if frameQueue.GetLength() < conf.FrameBufferLength {
+			updateProgress(frameQueue.GetLength())
 		}
-		if frameQueue.GetLength() == frameBufferLength-1 {
+		if frameQueue.GetLength() == conf.FrameBufferLength-1 {
 			fmt.Println("The buffer is full. Ready to use.")
 		}
 	}
 }
 
 func updateProgress(loaded int) {
-	if loaded == 1 {
-		bar = pb.StartNew(frameBufferLength)
-	}
-	bar.SetCurrent(int64(loaded) + 1)
-	if loaded == frameBufferLength-1 {
-		bar.Finish()
-	}
-}
-
-func updatePlainProgress(loaded int) {
 	loaded++
-	if (loaded%int(frameBufferLength/10) == 0) || loaded == frameBufferLength {
-		fmt.Println("Buffered", loaded, "frames of", frameBufferLength)
+	if (loaded%int(conf.FrameBufferLength/10) == 0) || loaded == conf.FrameBufferLength {
+		fmt.Println("Buffered", loaded, "frames of", conf.FrameBufferLength)
 	}
 }
 
 func saveFrames(w http.ResponseWriter) {
 	frames := frameQueue.GetAll()
 	cmd := exec.Command("ffmpeg",
-		"-framerate", strconv.Itoa(frameRate),
+		"-framerate", strconv.Itoa(conf.FrameRate),
 		"-f", "jpeg_pipe",
 		"-i", "pipe:0",
-		"-c:v", codec,
-		"-b:v", bitrate,
+		"-c:v", conf.Codec,
+		"-b:v", conf.Bitrate,
 		"-movflags", "frag_keyframe+empty_moov",
 		"-f", "mp4",
 		"-an",
@@ -92,9 +76,9 @@ func saveFrames(w http.ResponseWriter) {
 }
 
 func main() {
-	parseFlags()
+	conf = loadConfig()
 
-	frameQueue = queue.NewQueue(frameBufferLength)
+	frameQueue = queue.NewQueue(conf.FrameBufferLength)
 
 	go keepFrames()
 
@@ -104,5 +88,5 @@ func main() {
 		saveFrames(w)
 		fmt.Println("Given a snap in", time.Since(t))
 	})
-	http.ListenAndServe(bindAddress, nil)
+	http.ListenAndServe(conf.BindAddress, nil)
 }
